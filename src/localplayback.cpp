@@ -3,6 +3,7 @@
 
 #include <QDir>
 #include <QFileInfo>
+#include <QRegularExpression>
 #include <csignal>
 
 LocalPlayback::LocalPlayback(QObject *parent) : QObject(parent)
@@ -56,7 +57,7 @@ void LocalPlayback::setVolume(qreal volume)
     if (qFuzzyCompare(m_volume, volume)) return;
     m_volume = volume;
     emit volumeChanged();
-    setStatus(tr("Volume applies to the next track."));
+    applyVolumeToCurrentStream();
 }
 
 void LocalPlayback::loadTracks()
@@ -98,6 +99,30 @@ void LocalPlayback::stop()
     m_pendingTrack = -1; m_userStopped = true;
     if (m_process.state() == QProcess::Running) ::kill(static_cast<pid_t>(m_process.processId()), SIGKILL);
     m_paused = false; emit playingChanged();
+}
+
+void LocalPlayback::applyVolumeToCurrentStream()
+{
+    if (m_process.state() != QProcess::Running)
+        return;
+
+    QProcess pactl;
+    pactl.start(QStringLiteral("pactl"), {QStringLiteral("list"), QStringLiteral("sink-inputs")});
+    if (!pactl.waitForFinished(1000))
+        return;
+
+    const QString processId = QString::number(m_process.processId());
+    const QRegularExpression streamPattern(
+        QStringLiteral("Sink Input #(\\d+)(?:(?!Sink Input #)[\\s\\S])*?application\\.process\\.id = \\\"%1\\\"")
+            .arg(QRegularExpression::escape(processId)));
+    const QRegularExpressionMatch match = streamPattern.match(QString::fromLocal8Bit(pactl.readAllStandardOutput()));
+    if (!match.hasMatch())
+        return;
+
+    QProcess::startDetached(QStringLiteral("pactl"), {
+        QStringLiteral("set-sink-input-volume"), match.captured(1),
+        QStringLiteral("%1%").arg(qRound(m_volume * 100))
+    });
 }
 
 void LocalPlayback::startCurrentTrack()

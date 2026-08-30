@@ -38,6 +38,7 @@ private:
     void startCurrentTrack();
     void playTrack(int index);
     void stop();
+    void applyVolumeToCurrentStream();
     void setStatus(const QString &status);
     void loadTracks();
     QStringList m_tracks;

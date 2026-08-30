@@ -16,12 +16,18 @@
  */
 
 #include <asteroidapp.h>
+#include <QLockFile>
 #include <qqml.h>
 
 #include "localplayback.h"
 
 int main(int argc, char *argv[])
 {
+    QLockFile instanceLock(QStringLiteral("/tmp/asteroid-local-music.lock"));
+    instanceLock.setStaleLockTime(0);
+    if (!instanceLock.tryLock(100))
+        return 0;
+
     qmlRegisterType<LocalPlayback>("LocalMusic", 1, 0, "LocalPlayback");
     return AsteroidApp::main(argc, argv);
 }
