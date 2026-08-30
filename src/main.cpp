@@ -16,8 +16,12 @@
  */
 
 #include <asteroidapp.h>
+#include <qqml.h>
+
+#include "localplayback.h"
 
 int main(int argc, char *argv[])
 {
+    qmlRegisterType<LocalPlayback>("LocalMusic", 1, 0, "LocalPlayback");
     return AsteroidApp::main(argc, argv);
 }

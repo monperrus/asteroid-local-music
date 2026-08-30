@@ -1,9 +1,9 @@
 cmake_minimum_required(VERSION 3.6.0)
 
 project(
-	asteroid-music
+	asteroid-local-music
 	VERSION 2.0
-	DESCRIPTION "Default music app for AsteroidOS"
+	DESCRIPTION "Local music player for AsteroidOS"
 )
 
 find_package(ECM REQUIRED NO_MODULE)
@@ -15,24 +15,29 @@ include(FeatureSummary)
 include(GNUInstallDirs)
 include(ECMFindQmlModule)
 include(Asteroid6CMakeSettings)
-include(Asteroid6Translations)
-
-ecm_find_qmlmodule(Amber.Mpris 1.0)
 
 add_subdirectory(src)
 
 configure_file(
-	${CMAKE_CURRENT_SOURCE_DIR}/asteroid-music.in
-	${CMAKE_BINARY_DIR}/asteroid-music
+	${CMAKE_CURRENT_SOURCE_DIR}/asteroid-local-music.in
+	${CMAKE_BINARY_DIR}/asteroid-local-music
 	@ONLY
 )
 
 install(
-	PROGRAMS ${CMAKE_BINARY_DIR}/asteroid-music
+	PROGRAMS ${CMAKE_BINARY_DIR}/asteroid-local-music
 	DESTINATION ${CMAKE_INSTALL_BINDIR}
 )
 
-build_translations(i18n)
-generate_desktop(${CMAKE_SOURCE_DIR} asteroid-music)
+configure_file(
+	${CMAKE_CURRENT_SOURCE_DIR}/asteroid-local-music.desktop.template
+	${CMAKE_BINARY_DIR}/asteroid-local-music.desktop
+	@ONLY
+)
+
+install(
+	FILES ${CMAKE_BINARY_DIR}/asteroid-local-music.desktop
+	DESTINATION ${CMAKE_INSTALL_DATADIR}/applications
+)
 
 feature_summary(WHAT ALL FATAL_ON_MISSING_REQUIRED_PACKAGES)

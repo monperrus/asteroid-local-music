@@ -18,7 +18,7 @@
 import QtQuick
 import org.asteroid.controls
 import org.asteroid.utils
-import Amber.Mpris
+import LocalMusic 1.0
 
 Application {
     id: app
@@ -26,42 +26,26 @@ Application {
     centerColor: "#2577B3"
     outerColor: "#000619"
 
-    property bool isPlaying: mprisController.currentService && mprisController.playbackStatus == Mpris.Playing
-    property double bufferedVolume: 0.0
-
-    onBufferedVolumeChanged: mprisController.volume = bufferedVolume
-
-    MprisController {
-        id: mprisController
-        onVolumeChanged: bufferedVolumeTimer.restart()
-    }
-
-    BluetoothStatus { id: btStatus }
-
-    Timer {
-        id: bufferedVolumeTimer
-        interval: 500
-        repeat: false
-        onTriggered: bufferedVolume = mprisController.volume
+    LocalPlayback {
+        id: player
     }
 
     StatusPage {
-        //% "<h3>No data</h3>Sync AsteroidOS with your phone."
-        text: qsTrId("id-no-data-sync")
+        text: "<h3>Local music</h3>Copy MP3 files to the watch Music folder."
         icon: "ios-sync"
-        visible: !btStatus.connected
+        visible: player.trackCount === 0
     }
 
     Item {
         anchors.fill: parent
-        visible: btStatus.connected
+        visible: player.trackCount > 0
 
         Image {
             id: coverArt
             anchors.fill: parent
             fillMode: Image.PreserveAspectCrop
             opacity: 0.7
-            source: mprisController.metaData.artUrl ? mprisController.metaData.artUrl : ""
+            source: ""
         }
 
         Rectangle {
@@ -85,7 +69,7 @@ Application {
             height: Dims.h(10)
             width: DeviceSpecs.hasRoundScreen ? Dims.w(60) : Dims.w(80)
 
-            text: mprisController.metaData.title ? mprisController.metaData.title : ""
+            text: player.title
         }
 
         Marquee {
@@ -96,7 +80,7 @@ Application {
             height: Dims.h(10)
             width: DeviceSpecs.hasRoundScreen ? Dims.w(70) : Dims.w(80)
 
-            text: mprisController.metaData.contributingArtist ? mprisController.metaData.contributingArtist : ""
+            text: player.artist
         }
 
         IconButton {
@@ -107,7 +91,7 @@ Application {
                 leftMargin: Dims.iconButtonMargin
             }
             iconName: "ios-arrow-dropleft"
-            onClicked: if (mprisController.canGoPrevious) mprisController.previous()
+            onClicked: player.previous()
         }
 
         IconButton {
@@ -115,13 +99,8 @@ Application {
             anchors.centerIn: parent
             width: Dims.w(40)
             height: width
-            iconName: isPlaying ? "ios-pause" : "ios-play"
-            onClicked: {
-                if (isPlaying && mprisController.canPause)
-                    mprisController.pause()
-                else if (!isPlaying && mprisController.canPlay)
-                    mprisController.play()
-            }
+            iconName: player.playing ? "ios-pause" : "ios-play"
+            onClicked: player.playPause()
         }
 
         IconButton {
@@ -132,7 +111,7 @@ Application {
                 rightMargin: Dims.iconButtonMargin
             }
             iconName: "ios-arrow-dropright"
-            onClicked: if (mprisController.canGoNext) mprisController.next()
+            onClicked: player.next()
         }
 
         IconButton {
@@ -142,7 +121,7 @@ Application {
             anchors.bottom: parent.bottom
             anchors.bottomMargin: Dims.h(12)
             iconName: "ios-volume-down"
-            onClicked: bufferedVolume = Math.max(bufferedVolume - 0.05, 0)
+            onClicked: player.volume = Math.max(player.volume - 0.05, 0)
         }
 
         Rectangle {
@@ -161,7 +140,7 @@ Application {
             anchors.top: volumeSlider.top
             anchors.left: volumeSlider.left
             anchors.bottom: volumeSlider.bottom
-            width: volumeSlider.width * mprisController.volume
+            width: volumeSlider.width * player.volume
             color: "white"
             radius: 12
             opacity: 1.0
@@ -174,7 +153,7 @@ Application {
             anchors.bottom: parent.bottom
             anchors.bottomMargin: Dims.h(12)
             iconName: "ios-volume-up"
-            onClicked: bufferedVolume = Math.min(bufferedVolume + 0.05, 1)
+            onClicked: player.volume = Math.min(player.volume + 0.05, 1)
         }
     }
 }

@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Local Music
+Categories=Applications;
+Exec=asteroid-local-music
+Icon=ios-musical-notes-outline
+X-Asteroid-Center-Color=#2577B3
+X-Asteroid-Outer-Color=#000619
