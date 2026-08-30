@@ -2,17 +2,27 @@
 #include "localplayback.h"
 
 #include <QDir>
+#include <QFile>
 #include <QFileInfo>
 #include <QRegularExpression>
+#include <QSettings>
+#include <cerrno>
 #include <csignal>
 
 LocalPlayback::LocalPlayback(QObject *parent) : QObject(parent)
 {
     m_process.setProcessChannelMode(QProcess::MergedChannels);
+    connect(&m_process, &QProcess::started, this, [this] {
+        m_playerProcessId = m_process.processId();
+        savePlaybackState();
+        emit playingChanged();
+    });
     connect(&m_process, qOverload<int, QProcess::ExitStatus>(&QProcess::finished), this,
             [this](int, QProcess::ExitStatus) {
         const bool startPending = m_pendingTrack >= 0;
         const bool advance = !m_userStopped && !startPending;
+        m_playerProcessId = 0;
+        clearPlaybackState();
         m_paused = false;
         emit playingChanged();
         if (startPending) {
@@ -30,6 +40,7 @@ LocalPlayback::LocalPlayback(QObject *parent) : QObject(parent)
             setStatus(tr("Could not start GStreamer playback."));
     });
     loadTracks();
+    restorePlaybackState();
 }
 
 QString LocalPlayback::title() const
@@ -47,7 +58,7 @@ QString LocalPlayback::artist() const
 
 int LocalPlayback::trackNumber() const { return m_currentTrack + 1; }
 int LocalPlayback::trackCount() const { return m_tracks.size(); }
-bool LocalPlayback::playing() const { return m_process.state() == QProcess::Running && !m_paused; }
+bool LocalPlayback::playing() const { return playerIsRunning() && !m_paused; }
 qreal LocalPlayback::volume() const { return m_volume; }
 QString LocalPlayback::status() const { return m_status; }
 
@@ -76,9 +87,9 @@ void LocalPlayback::reload() { stop(); loadTracks(); }
 void LocalPlayback::playPause()
 {
     if (m_tracks.isEmpty()) { loadTracks(); if (m_tracks.isEmpty()) return; }
-    if (m_process.state() != QProcess::Running) { if (m_currentTrack < 0) m_currentTrack = 0; startCurrentTrack(); }
-    else if (m_paused) { ::kill(static_cast<pid_t>(m_process.processId()), SIGCONT); m_paused = false; emit playingChanged(); }
-    else { ::kill(static_cast<pid_t>(m_process.processId()), SIGSTOP); m_paused = true; emit playingChanged(); }
+    if (!playerIsRunning()) { if (m_currentTrack < 0) m_currentTrack = 0; startCurrentTrack(); }
+    else if (m_paused) { ::kill(static_cast<pid_t>(m_playerProcessId), SIGCONT); m_paused = false; savePlaybackState(); emit playingChanged(); }
+    else { ::kill(static_cast<pid_t>(m_playerProcessId), SIGSTOP); m_paused = true; savePlaybackState(); emit playingChanged(); }
 }
 
 void LocalPlayback::playTrack(int index)
@@ -88,7 +99,13 @@ void LocalPlayback::playTrack(int index)
     if (m_process.state() == QProcess::Running) {
         m_pendingTrack = index; m_userStopped = true;
         ::kill(static_cast<pid_t>(m_process.processId()), SIGKILL);
-    } else { m_currentTrack = index; emit trackChanged(); startCurrentTrack(); }
+    } else {
+        if (playerIsRunning())
+            ::kill(static_cast<pid_t>(m_playerProcessId), SIGKILL);
+        m_playerProcessId = 0;
+        clearPlaybackState();
+        m_currentTrack = index; emit trackChanged(); startCurrentTrack();
+    }
 }
 
 void LocalPlayback::next() { if (!m_tracks.isEmpty()) playTrack(m_currentTrack + 1); }
@@ -98,12 +115,15 @@ void LocalPlayback::stop()
 {
     m_pendingTrack = -1; m_userStopped = true;
     if (m_process.state() == QProcess::Running) ::kill(static_cast<pid_t>(m_process.processId()), SIGKILL);
+    else if (playerIsRunning()) ::kill(static_cast<pid_t>(m_playerProcessId), SIGKILL);
+    m_playerProcessId = 0;
+    clearPlaybackState();
     m_paused = false; emit playingChanged();
 }
 
 void LocalPlayback::applyVolumeToCurrentStream()
 {
-    if (m_process.state() != QProcess::Running)
+    if (!playerIsRunning())
         return;
 
     QProcess pactl;
@@ -111,7 +131,7 @@ void LocalPlayback::applyVolumeToCurrentStream()
     if (!pactl.waitForFinished(1000))
         return;
 
-    const QString processId = QString::number(m_process.processId());
+    const QString processId = QString::number(m_playerProcessId);
     const QRegularExpression streamPattern(
         QStringLiteral("Sink Input #(\\d+)(?:(?!Sink Input #)[\\s\\S])*?application\\.process\\.id = \\\"%1\\\"")
             .arg(QRegularExpression::escape(processId)));
@@ -135,6 +155,75 @@ void LocalPlayback::startCurrentTrack()
         QStringLiteral("!"), QStringLiteral("audioconvert"), QStringLiteral("!"), QStringLiteral("audioresample"),
         QStringLiteral("!"), QStringLiteral("pulsesink"), QStringLiteral("volume=") + QString::number(m_volume, 'f', 2) });
     emit trackChanged(); emit playingChanged();
+}
+
+bool LocalPlayback::playerIsRunning() const
+{
+    return m_playerProcessId > 0 && (::kill(static_cast<pid_t>(m_playerProcessId), 0) == 0 || errno == EPERM);
+}
+
+void LocalPlayback::savePlaybackState()
+{
+    QSettings state(QStringLiteral("/tmp/asteroid-local-music-player.ini"), QSettings::IniFormat);
+    state.setValue(QStringLiteral("pid"), m_playerProcessId);
+    state.setValue(QStringLiteral("track"), m_currentTrack);
+    state.setValue(QStringLiteral("paused"), m_paused);
+    state.sync();
+}
+
+void LocalPlayback::clearPlaybackState()
+{
+    QSettings state(QStringLiteral("/tmp/asteroid-local-music-player.ini"), QSettings::IniFormat);
+    state.clear();
+    state.sync();
+}
+
+void LocalPlayback::restorePlaybackState()
+{
+    QSettings state(QStringLiteral("/tmp/asteroid-local-music-player.ini"), QSettings::IniFormat);
+    m_playerProcessId = state.value(QStringLiteral("pid")).toLongLong();
+    const int savedTrack = state.value(QStringLiteral("track"), m_currentTrack).toInt();
+    m_paused = state.value(QStringLiteral("paused")).toBool();
+    if (playerIsRunning() && !m_tracks.isEmpty()) {
+        m_currentTrack = qBound(0, savedTrack, m_tracks.size() - 1);
+        emit trackChanged();
+        emit playingChanged();
+        return;
+    }
+    m_playerProcessId = 0;
+    m_paused = false;
+    clearPlaybackState();
+
+    const QDir proc(QStringLiteral("/proc"));
+    for (const QString &entry : proc.entryList(QDir::Dirs | QDir::NoDotAndDotDot)) {
+        bool isProcess = false;
+        const qint64 pid = entry.toLongLong(&isProcess);
+        if (!isProcess)
+            continue;
+        QFile commandLine(proc.filePath(entry + QStringLiteral("/cmdline")));
+        if (!commandLine.open(QIODevice::ReadOnly))
+            continue;
+        const QList<QByteArray> arguments = commandLine.readAll().split('\0');
+        bool isGStreamer = false;
+        QString location;
+        for (const QByteArray &argument : arguments) {
+            if (argument.contains("gst-launch-1.0"))
+                isGStreamer = true;
+            if (argument.startsWith("location="))
+                location = QString::fromLocal8Bit(argument.mid(qstrlen("location=")));
+        }
+        if (!isGStreamer || !location.startsWith(QStringLiteral("/home/ceres/Music/")))
+            continue;
+        const int track = m_tracks.indexOf(location);
+        if (track < 0)
+            continue;
+        m_playerProcessId = pid;
+        m_currentTrack = track;
+        savePlaybackState();
+        emit trackChanged();
+        emit playingChanged();
+        return;
+    }
 }
 
 void LocalPlayback::setStatus(const QString &status)

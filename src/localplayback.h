@@ -39,10 +39,15 @@ private:
     void playTrack(int index);
     void stop();
     void applyVolumeToCurrentStream();
+    bool playerIsRunning() const;
+    void savePlaybackState();
+    void restorePlaybackState();
+    void clearPlaybackState();
     void setStatus(const QString &status);
     void loadTracks();
     QStringList m_tracks;
     QProcess m_process;
+    qint64 m_playerProcessId = 0;
     int m_currentTrack = -1;
     int m_pendingTrack = -1;
     qreal m_volume = 1.0;
