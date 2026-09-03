@@ -24,6 +24,8 @@ LocalPlayback::LocalPlayback(QObject *parent) : QObject(parent)
         m_playerProcessId = 0;
         clearPlaybackState();
         m_paused = false;
+        if (!startPending && !advance)
+            setSink(QString());
         emit playingChanged();
         if (startPending) {
             m_currentTrack = m_pendingTrack;
@@ -39,6 +41,12 @@ LocalPlayback::LocalPlayback(QObject *parent) : QObject(parent)
         if (m_process.error() == QProcess::FailedToStart)
             setStatus(tr("Could not start GStreamer playback."));
     });
+    connect(&m_amplifier, &SpeakerAmp::failed, this, [this](const QString &reason) {
+        setStatus(reason);
+    });
+    m_sinkWatcher.setInterval(3000);
+    connect(&m_sinkWatcher, &QTimer::timeout, this, &LocalPlayback::followSinkChanges);
+    m_sinkWatcher.start();
     loadTracks();
     restorePlaybackState();
 }
@@ -61,6 +69,12 @@ int LocalPlayback::trackCount() const { return m_tracks.size(); }
 bool LocalPlayback::playing() const { return playerIsRunning() && !m_paused; }
 qreal LocalPlayback::volume() const { return m_volume; }
 QString LocalPlayback::status() const { return m_status; }
+
+QString LocalPlayback::output() const
+{
+    if (m_sink.isEmpty()) return QString();
+    return m_sink.startsWith(QStringLiteral("bluez_sink.")) ? tr("Bluetooth") : tr("Speaker");
+}
 
 void LocalPlayback::setVolume(qreal volume)
 {
@@ -118,18 +132,31 @@ void LocalPlayback::stop()
     else if (playerIsRunning()) ::kill(static_cast<pid_t>(m_playerProcessId), SIGKILL);
     m_playerProcessId = 0;
     clearPlaybackState();
+    setSink(QString());
     m_paused = false; emit playingChanged();
 }
 
 void LocalPlayback::applyVolumeToCurrentStream()
 {
-    if (!playerIsRunning())
+    const int sinkInput = currentSinkInputId();
+    if (sinkInput < 0)
         return;
+
+    QProcess::startDetached(QStringLiteral("pactl"), {
+        QStringLiteral("set-sink-input-volume"), QString::number(sinkInput),
+        QStringLiteral("%1%").arg(qRound(m_volume * 100))
+    });
+}
+
+int LocalPlayback::currentSinkInputId() const
+{
+    if (!playerIsRunning())
+        return -1;
 
     QProcess pactl;
     pactl.start(QStringLiteral("pactl"), {QStringLiteral("list"), QStringLiteral("sink-inputs")});
     if (!pactl.waitForFinished(1000))
-        return;
+        return -1;
 
     const QString processId = QString::number(m_playerProcessId);
     const QRegularExpression streamPattern(
@@ -137,23 +164,97 @@ void LocalPlayback::applyVolumeToCurrentStream()
             .arg(QRegularExpression::escape(processId)));
     const QRegularExpressionMatch match = streamPattern.match(QString::fromLocal8Bit(pactl.readAllStandardOutput()));
     if (!match.hasMatch())
-        return;
+        return -1;
+    return match.captured(1).toInt();
+}
 
-    QProcess::startDetached(QStringLiteral("pactl"), {
-        QStringLiteral("set-sink-input-volume"), match.captured(1),
-        QStringLiteral("%1%").arg(qRound(m_volume * 100))
-    });
+/*
+ * Bluetooth headphones, when connected, show up as a bluez_sink.* A2DP sink
+ * and are what the user means to listen through. Without them, play on the
+ * watch speaker (sink.primary from module-droid-card) rather than on whatever
+ * PulseAudio happens to consider the default sink.
+ */
+QString LocalPlayback::preferredSink() const
+{
+    QProcess pactl;
+    pactl.start(QStringLiteral("pactl"), {QStringLiteral("list"), QStringLiteral("short"), QStringLiteral("sinks")});
+    if (!pactl.waitForFinished(1000))
+        return QString();
+
+    QString bluetooth, speaker, fallback;
+    const QStringList lines = QString::fromLocal8Bit(pactl.readAllStandardOutput()).split(QLatin1Char('\n'), Qt::SkipEmptyParts);
+    for (const QString &line : lines) {
+        const QString name = line.split(QLatin1Char('\t')).value(1);
+        if (name.isEmpty() || name.startsWith(QStringLiteral("auto_null")))
+            continue;
+        if (name.startsWith(QStringLiteral("bluez_sink."))) {
+            if (bluetooth.isEmpty()) bluetooth = name;
+        } else if (name == QStringLiteral("sink.primary")) {
+            speaker = name;
+        } else if (fallback.isEmpty()) {
+            fallback = name;
+        }
+    }
+    if (!bluetooth.isEmpty()) return bluetooth;
+    return speaker.isEmpty() ? fallback : speaker;
+}
+
+void LocalPlayback::prepareSink(const QString &sink)
+{
+    if (sink.isEmpty())
+        return;
+    QProcess::execute(QStringLiteral("pactl"), {QStringLiteral("set-sink-mute"), sink, QStringLiteral("0")});
+    if (sink == QStringLiteral("sink.primary")) {
+        // The speaker amplifier is started without its excursion and thermal
+        // protection verified, so cap the sink; the app volume rides on the
+        // stream itself.
+        QProcess::execute(QStringLiteral("pactl"),
+                          {QStringLiteral("set-sink-volume"), sink, QStringLiteral("55%")});
+    }
+}
+
+void LocalPlayback::setSink(const QString &sink)
+{
+    if (m_sink != sink) {
+        m_sink = sink;
+        emit outputChanged();
+    }
+    prepareSink(sink);
+    if (sink == QStringLiteral("sink.primary")) m_amplifier.enable();
+    else m_amplifier.disable();
+}
+
+void LocalPlayback::followSinkChanges()
+{
+    if (!playerIsRunning())
+        return;
+    const QString target = preferredSink();
+    if (target.isEmpty() || target == m_sink)
+        return;
+    const int sinkInput = currentSinkInputId();
+    if (sinkInput < 0)
+        return;
+    if (QProcess::execute(QStringLiteral("pactl"),
+                          {QStringLiteral("move-sink-input"), QString::number(sinkInput), target}) != 0)
+        return;
+    setSink(target);
+    applyVolumeToCurrentStream();
 }
 
 void LocalPlayback::startCurrentTrack()
 {
     if (m_currentTrack < 0 || m_currentTrack >= m_tracks.size()) return;
     m_userStopped = false; m_paused = false; setStatus(QString());
-    m_process.start(QStringLiteral("gst-launch-1.0"), {
+    const QString sink = preferredSink();
+    QStringList arguments = {
         QStringLiteral("-q"), QStringLiteral("filesrc"), QStringLiteral("location=") + m_tracks.at(m_currentTrack),
         QStringLiteral("!"), QStringLiteral("mpegaudioparse"), QStringLiteral("!"), QStringLiteral("mpg123audiodec"),
         QStringLiteral("!"), QStringLiteral("audioconvert"), QStringLiteral("!"), QStringLiteral("audioresample"),
-        QStringLiteral("!"), QStringLiteral("pulsesink"), QStringLiteral("volume=") + QString::number(m_volume, 'f', 2) });
+        QStringLiteral("!"), QStringLiteral("pulsesink"), QStringLiteral("volume=") + QString::number(m_volume, 'f', 2) };
+    if (!sink.isEmpty())
+        arguments.append(QStringLiteral("device=") + sink);
+    setSink(sink);
+    m_process.start(QStringLiteral("gst-launch-1.0"), arguments);
     emit trackChanged(); emit playingChanged();
 }
 
@@ -168,6 +269,7 @@ void LocalPlayback::savePlaybackState()
     state.setValue(QStringLiteral("pid"), m_playerProcessId);
     state.setValue(QStringLiteral("track"), m_currentTrack);
     state.setValue(QStringLiteral("paused"), m_paused);
+    state.setValue(QStringLiteral("sink"), m_sink);
     state.sync();
 }
 
@@ -186,6 +288,7 @@ void LocalPlayback::restorePlaybackState()
     m_paused = state.value(QStringLiteral("paused")).toBool();
     if (playerIsRunning() && !m_tracks.isEmpty()) {
         m_currentTrack = qBound(0, savedTrack, m_tracks.size() - 1);
+        setSink(state.value(QStringLiteral("sink")).toString());
         emit trackChanged();
         emit playingChanged();
         return;
@@ -205,12 +308,14 @@ void LocalPlayback::restorePlaybackState()
             continue;
         const QList<QByteArray> arguments = commandLine.readAll().split('\0');
         bool isGStreamer = false;
-        QString location;
+        QString location, sink;
         for (const QByteArray &argument : arguments) {
             if (argument.contains("gst-launch-1.0"))
                 isGStreamer = true;
             if (argument.startsWith("location="))
                 location = QString::fromLocal8Bit(argument.mid(qstrlen("location=")));
+            if (argument.startsWith("device="))
+                sink = QString::fromLocal8Bit(argument.mid(qstrlen("device=")));
         }
         if (!isGStreamer || !location.startsWith(QStringLiteral("/home/ceres/Music/")))
             continue;
@@ -219,6 +324,7 @@ void LocalPlayback::restorePlaybackState()
             continue;
         m_playerProcessId = pid;
         m_currentTrack = track;
+        setSink(sink);
         savePlaybackState();
         emit trackChanged();
         emit playingChanged();

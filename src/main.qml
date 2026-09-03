@@ -60,6 +60,19 @@ Application {
             opacity: 0.5
         }
 
+        Text {
+            id: outputLabel
+            anchors.top: parent.top
+            anchors.topMargin: Dims.h(3)
+            anchors.horizontalCenter: parent.horizontalCenter
+            color: "white"
+            opacity: 0.6
+            font.pixelSize: Dims.l(6)
+            font.capitalization: Font.AllUppercase
+            text: player.output
+            visible: text !== ""
+        }
+
         Marquee {
             id: songLabel
             font.bold: true

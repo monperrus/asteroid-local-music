@@ -4,6 +4,9 @@
 #include <QObject>
 #include <QProcess>
 #include <QStringList>
+#include <QTimer>
+
+#include "speakeramp.h"
 
 class LocalPlayback : public QObject
 {
@@ -15,6 +18,7 @@ class LocalPlayback : public QObject
     Q_PROPERTY(bool playing READ playing NOTIFY playingChanged)
     Q_PROPERTY(qreal volume READ volume WRITE setVolume NOTIFY volumeChanged)
     Q_PROPERTY(QString status READ status NOTIFY statusChanged)
+    Q_PROPERTY(QString output READ output NOTIFY outputChanged)
 public:
     explicit LocalPlayback(QObject *parent = nullptr);
     QString title() const;
@@ -24,6 +28,7 @@ public:
     bool playing() const;
     qreal volume() const;
     QString status() const;
+    QString output() const;
     Q_INVOKABLE void playPause();
     Q_INVOKABLE void next();
     Q_INVOKABLE void previous();
@@ -34,11 +39,17 @@ signals:
     void playingChanged();
     void volumeChanged();
     void statusChanged();
+    void outputChanged();
 private:
     void startCurrentTrack();
     void playTrack(int index);
     void stop();
     void applyVolumeToCurrentStream();
+    int currentSinkInputId() const;
+    QString preferredSink() const;
+    void prepareSink(const QString &sink);
+    void setSink(const QString &sink);
+    void followSinkChanges();
     bool playerIsRunning() const;
     void savePlaybackState();
     void restorePlaybackState();
@@ -47,6 +58,9 @@ private:
     void loadTracks();
     QStringList m_tracks;
     QProcess m_process;
+    QTimer m_sinkWatcher;
+    SpeakerAmp m_amplifier;
+    QString m_sink;
     qint64 m_playerProcessId = 0;
     int m_currentTrack = -1;
     int m_pendingTrack = -1;

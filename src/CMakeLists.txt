@@ -1,4 +1,4 @@
-add_library(asteroid-local-music main.cpp localplayback.cpp)
+add_library(asteroid-local-music main.cpp localplayback.cpp speakeramp.cpp)
 set_target_properties(asteroid-local-music PROPERTIES PREFIX "")
 
 asteroid_app_qml_module(asteroid-local-music
