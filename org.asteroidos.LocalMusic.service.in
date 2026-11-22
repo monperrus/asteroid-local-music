@@ -1,0 +1,3 @@
+[D-BUS Service]
+Name=org.asteroidos.LocalMusic
+Exec=@CMAKE_INSTALL_FULL_LIBEXECDIR@/asteroid-local-music-player

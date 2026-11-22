@@ -31,9 +31,9 @@ Application {
     }
 
     StatusPage {
-        text: "<h3>Local music</h3>Copy MP3 files to the watch Music folder."
+        text: player.status
         icon: "ios-sync"
-        visible: player.trackCount === 0
+        visible: player.trackCount === 0 && text !== ""
     }
 
     Item {
@@ -125,6 +125,19 @@ Application {
             }
             iconName: "ios-arrow-dropright"
             onClicked: player.next()
+        }
+
+        Text {
+            anchors.top: playButton.bottom
+            anchors.horizontalCenter: parent.horizontalCenter
+            width: Dims.w(65)
+            text: player.status
+            color: "white"
+            font.pixelSize: Dims.l(4)
+            horizontalAlignment: Text.AlignHCenter
+            wrapMode: Text.WordWrap
+            maximumLineCount: 2
+            elide: Text.ElideRight
         }
 
         IconButton {

@@ -5,12 +5,14 @@
 #include <QProcess>
 #include <QStringList>
 #include <QTimer>
+#include <QVariantMap>
 
 #include "speakeramp.h"
 
 class LocalPlayback : public QObject
 {
     Q_OBJECT
+    Q_CLASSINFO("D-Bus Interface", "org.asteroidos.LocalMusic")
     Q_PROPERTY(QString title READ title NOTIFY trackChanged)
     Q_PROPERTY(QString artist READ artist NOTIFY trackChanged)
     Q_PROPERTY(int trackNumber READ trackNumber NOTIFY trackChanged)
@@ -21,6 +23,7 @@ class LocalPlayback : public QObject
     Q_PROPERTY(QString output READ output NOTIFY outputChanged)
 public:
     explicit LocalPlayback(QObject *parent = nullptr);
+    ~LocalPlayback() override;
     QString title() const;
     QString artist() const;
     int trackNumber() const;
@@ -29,12 +32,15 @@ public:
     qreal volume() const;
     QString status() const;
     QString output() const;
-    Q_INVOKABLE void playPause();
-    Q_INVOKABLE void next();
-    Q_INVOKABLE void previous();
-    Q_INVOKABLE void reload();
-    void setVolume(qreal volume);
+    Q_SCRIPTABLE Q_INVOKABLE QVariantMap open();
+    Q_SCRIPTABLE Q_INVOKABLE QVariantMap snapshot() const;
+    Q_SCRIPTABLE Q_INVOKABLE void playPause();
+    Q_SCRIPTABLE Q_INVOKABLE void next();
+    Q_SCRIPTABLE Q_INVOKABLE void previous();
+    Q_SCRIPTABLE Q_INVOKABLE void reload();
+    Q_SCRIPTABLE Q_INVOKABLE void setVolume(double volume);
 signals:
+    Q_SCRIPTABLE void stateChanged();
     void trackChanged();
     void playingChanged();
     void volumeChanged();
@@ -42,6 +48,8 @@ signals:
     void outputChanged();
 private:
     void startCurrentTrack();
+    void readPlayerOutput();
+    void finishTrack(bool reachedEnd);
     void playTrack(int index);
     void stop();
     void applyVolumeToCurrentStream();
@@ -55,7 +63,7 @@ private:
     void restorePlaybackState();
     void clearPlaybackState();
     void setStatus(const QString &status);
-    void loadTracks();
+    void loadTracks(bool preserveSelection = false);
     QStringList m_tracks;
     QProcess m_process;
     QTimer m_sinkWatcher;
@@ -65,6 +73,8 @@ private:
     int m_currentTrack = -1;
     int m_pendingTrack = -1;
     qreal m_volume = 1.0;
+    bool m_volumePending = false;
+    bool m_reachedEnd = false;
     bool m_paused = false;
     bool m_userStopped = false;
     QString m_status;

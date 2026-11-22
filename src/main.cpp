@@ -19,7 +19,7 @@
 #include <QLockFile>
 #include <qqml.h>
 
-#include "localplayback.h"
+#include "playbackclient.h"
 
 int main(int argc, char *argv[])
 {
@@ -28,6 +28,6 @@ int main(int argc, char *argv[])
     if (!instanceLock.tryLock(100))
         return 0;
 
-    qmlRegisterType<LocalPlayback>("LocalMusic", 1, 0, "LocalPlayback");
+    qmlRegisterType<PlaybackClient>("LocalMusic", 1, 0, "LocalPlayback");
     return AsteroidApp::main(argc, argv);
 }
